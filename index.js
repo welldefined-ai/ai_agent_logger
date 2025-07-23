@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-const readline = require('readline');
-const { query } = require('@anthropic-ai/claude-code');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+import readline from 'readline';
+import { query } from '@anthropic-ai/claude-code';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 class AICodeSimulator {
   constructor() {
@@ -191,9 +191,7 @@ Keep your responses short and focused on the specific task at hand.`;
   }
 }
 
-if (require.main === module) {
-  const simulator = new AICodeSimulator();
-  simulator.start();
-}
+const simulator = new AICodeSimulator();
+simulator.start();
 
-module.exports = AICodeSimulator;
+export default AICodeSimulator;
