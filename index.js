@@ -3,6 +3,7 @@
 import readline from 'readline';
 import { query } from '@anthropic-ai/claude-code';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { spawn } from 'child_process';
 
 // 漂亮的加载动画类
 class LoadingSpinner {
@@ -81,9 +82,11 @@ class AICodeSimulator {
 
     this.conversationHistory = [];
     this.currentProvider = 'claude'; // Default to Claude
+    this.claudeMode = 'sdk'; // 'sdk' or 'native'
     this.claudeSessionId = null; // 持续的Claude会话ID
     this.permissionHandler = new PermissionHandler(this.rl);
     this.loadingSpinner = null;
+    this.claudeProcess = null; // 原生Claude Code CLI子进程
     this.systemPrompt = `You are Claude Code, Anthropic's official CLI for Claude.
 You are an interactive CLI tool that helps users with software engineering tasks.
 You should be concise, direct, and to the point.
@@ -100,11 +103,17 @@ Keep your responses short and focused on the specific task at hand.`;
     console.log(`🔮 当前模式: ${this.currentProvider.toUpperCase()}`);
     
     if (this.currentProvider === 'claude') {
-      console.log('✨ Claude Code 特性:');
-      console.log('   • 🔧 完整工具集成 (文件操作、代码分析、Shell命令)');
-      console.log('   • 🔐 智能权限管理 (安全的文件系统访问)');
-      console.log('   • 💬 持续对话会话 (上下文记忆)');
-      console.log('   • ⚡ 实时加载动画');
+      console.log(`✨ Claude Code 模式: ${this.claudeMode.toUpperCase()}`);
+      if (this.claudeMode === 'native') {
+        console.log('   • 🎯 原生Claude Code CLI体验');
+        console.log('   • 🔧 完整交互式功能');
+        console.log('   • 🚀 最佳性能和兼容性');
+      } else {
+        console.log('   • 🔧 完整工具集成 (文件操作、代码分析、Shell命令)');
+        console.log('   • 🔐 智能权限管理 (安全的文件系统访问)');
+        console.log('   • 💬 持续对话会话 (上下文记忆)');
+        console.log('   • ⚡ 实时加载动画');
+      }
     } else {
       console.log('🤔 Gemini 模式: 对话式AI助手');
     }
@@ -119,12 +128,21 @@ Keep your responses short and focused on the specific task at hand.`;
   }
 
   promptUser() {
-    const prompt = this.currentProvider === 'claude' ? 
-      '🤖 claude-code > ' : 
-      '🤔 gemini > ';
+    let prompt;
+    if (this.currentProvider === 'claude') {
+      prompt = this.claudeMode === 'native' ? '🎯 claude-native > ' : '🤖 claude-sdk > ';
+    } else {
+      prompt = '🤔 gemini > ';
+    }
+    
     this.rl.question(prompt, async (input) => {
       // 处理特殊命令
       if (input.toLowerCase() === '/exit' || input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
+        // 清理Claude进程
+        if (this.claudeProcess) {
+          this.claudeProcess.kill();
+          this.claudeProcess = null;
+        }
         this.rl.close();
         console.log('\n👋 再见！');
         process.exit(0);
@@ -133,6 +151,14 @@ Keep your responses short and focused on the specific task at hand.`;
       if (input.toLowerCase() === '/clear' || input.toLowerCase() === 'clear') {
         this.conversationHistory = [];
         this.claudeSessionId = null; // 重置Claude会话ID
+        
+        // 如果在native模式，重启Claude进程以清空上下文
+        if (this.currentProvider === 'claude' && this.claudeMode === 'native' && this.claudeProcess) {
+          console.log('🔄 重启Claude CLI进程以清空上下文...');
+          this.claudeProcess.kill();
+          this.claudeProcess = null;
+        }
+        
         console.log('💭 对话历史已清空\n');
         this.promptUser();
         return;
@@ -142,9 +168,33 @@ Keep your responses short and focused on the specific task at hand.`;
         this.currentProvider = this.currentProvider === 'claude' ? 'gemini' : 'claude';
         console.log(`🔄 已切换到: ${this.currentProvider.toUpperCase()}`);
         if (this.currentProvider === 'claude') {
-          console.log('现在您处于 Claude Code 模式，享受完整的编程助手体验！');
+          console.log(`现在您处于 Claude Code ${this.claudeMode.toUpperCase()} 模式，享受完整的编程助手体验！`);
         } else {
           console.log('现在您处于 Gemini 模式。');
+        }
+        console.log();
+        this.promptUser();
+        return;
+      }
+
+      if (input.toLowerCase() === '/mode' || input.toLowerCase() === 'mode') {
+        if (this.currentProvider === 'claude') {
+          // 清理现有的Claude进程
+          if (this.claudeProcess) {
+            this.claudeProcess.kill();
+            this.claudeProcess = null;
+          }
+          
+          this.claudeMode = this.claudeMode === 'sdk' ? 'native' : 'sdk';
+          console.log(`🔄 Claude模式已切换到: ${this.claudeMode.toUpperCase()}`);
+          if (this.claudeMode === 'native') {
+            console.log('现在使用原生Claude Code CLI，获得完整交互体验！');
+          } else {
+            console.log('现在使用Claude Code SDK，享受自定义功能！');
+            this.claudeSessionId = null; // 重置会话
+          }
+        } else {
+          console.log('⚠️ 只有在Claude模式下才能切换Claude子模式');
         }
         console.log();
         this.promptUser();
@@ -169,16 +219,25 @@ Keep your responses short and focused on the specific task at hand.`;
   showHelp() {
     console.log('\n📖 可用命令:');
     console.log('  /switch - 切换AI提供商 (Claude Code ↔ Gemini)');
+    console.log('  /mode   - 切换Claude模式 (SDK ↔ Native CLI)');
     console.log('  /clear  - 清空对话历史');
     console.log('  /exit   - 退出程序');
     console.log('  /help   - 显示此帮助信息');
-    console.log('\n当前模式:', this.currentProvider.toUpperCase());
+    console.log(`\n当前模式: ${this.currentProvider.toUpperCase()}`);
     if (this.currentProvider === 'claude') {
-      console.log('🤖 Claude Code 模式: 完整的编程助手体验');
-      console.log('   ✨ 支持文件读写、代码分析、项目管理');
-      console.log('   🔧 内置工具: Bash, Read, Write, Edit, Grep 等');
-      console.log('   🔐 自动权限管理（工具使用时会提示确认）');
-      console.log('   💬 持续对话会话（记住上下文）');
+      console.log(`🤖 Claude Code 模式: ${this.claudeMode.toUpperCase()}`);
+      if (this.claudeMode === 'native') {
+        console.log('   🎯 原生Claude Code CLI子进程');
+        console.log('   ✨ 完整交互式体验，与官方CLI完全一致');
+        console.log('   🚀 最佳性能和功能兼容性');
+        console.log('   💡 使用 /mode 切换回SDK模式');
+      } else {
+        console.log('   ✨ 支持文件读写、代码分析、项目管理');
+        console.log('   🔧 内置工具: Bash, Read, Write, Edit, Grep 等');
+        console.log('   🔐 自动权限管理（工具使用时会提示确认）');
+        console.log('   💬 持续对话会话（记住上下文）');
+        console.log('   💡 使用 /mode 切换到Native CLI模式');
+      }
     } else {
       console.log('🤔 Gemini 模式: 对话式AI助手');
     }
@@ -187,7 +246,11 @@ Keep your responses short and focused on the specific task at hand.`;
 
   async sendToAI(userInput) {
     if (this.currentProvider === 'claude') {
-      await this.sendToClaude(userInput);
+      if (this.claudeMode === 'native') {
+        await this.sendToClaudeNative(userInput);
+      } else {
+        await this.sendToClaude(userInput);
+      }
     } else {
       await this.sendToGemini(userInput);
     }
@@ -300,6 +363,92 @@ Keep your responses short and focused on the specific task at hand.`;
     }
 
     this.promptUser();
+  }
+
+  async sendToClaudeNative(userInput) {
+    try {
+      // 如果没有运行的Claude进程，启动一个新的
+      if (!this.claudeProcess) {
+        console.log('\n🎯 正在启动原生Claude Code CLI...');
+        
+        // 启动claude-code进程，使用交互模式
+        this.claudeProcess = spawn('claude-code', ['-i'], {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: process.cwd(),
+          env: { ...process.env }
+        });
+
+        // 设置进程输出处理
+        let responseBuffer = '';
+        this.claudeProcess.stdout.on('data', (data) => {
+          const output = data.toString();
+          responseBuffer += output;
+          
+          // 检查是否有完整的响应（以换行符结束）
+          if (output.includes('\n')) {
+            // 过滤掉原生CLI的提示符，避免重复显示
+            const cleanOutput = responseBuffer.replace(/^claude-code > /gm, '');
+            process.stdout.write(cleanOutput);
+            responseBuffer = '';
+            
+            // 当Claude响应完成后，返回到我们的提示符
+            setTimeout(() => {
+              this.promptUser();
+            }, 100);
+          }
+        });
+
+        this.claudeProcess.stderr.on('data', (data) => {
+          const error = data.toString();
+          console.error(`Claude CLI Error: ${error}`);
+        });
+
+        this.claudeProcess.on('close', (code) => {
+          console.log(`\n🔄 Claude Code CLI进程已退出 (code: ${code})`);
+          this.claudeProcess = null;
+          this.promptUser();
+        });
+
+        this.claudeProcess.on('error', (error) => {
+          if (error.code === 'ENOENT') {
+            console.error('\n❌ 错误: 找不到claude-code命令');
+            console.log('💡 请确保已安装Claude Code CLI:');
+            console.log('   npm install -g @anthropic-ai/claude-code');
+            console.log('   或者使用: brew install anthropic/claude/claude-code');
+          } else {
+            console.error('\n❌ Claude CLI启动错误:', error.message);
+          }
+          this.claudeProcess = null;
+          this.promptUser();
+        });
+
+        // 等待进程启动
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        console.log('✅ Claude Code CLI已启动');
+      }
+
+      // 发送用户输入到Claude进程
+      if (this.claudeProcess && this.claudeProcess.stdin.writable) {
+        this.claudeProcess.stdin.write(userInput + '\n');
+        // 不在这里调用promptUser()，让输出处理器来决定何时返回提示符
+      } else {
+        console.error('❌ Claude进程不可写入');
+        this.claudeProcess = null;
+        this.promptUser();
+      }
+
+    } catch (error) {
+      console.error('\n❌ Claude Native模式错误:', error.message);
+      
+      if (error.message.includes('claude-code')) {
+        console.log('\n💡 请确保已安装Claude Code CLI:');
+        console.log('   npm install -g @anthropic-ai/claude-code');
+        console.log('   或者检查ANTHROPIC_API_KEY环境变量');
+      }
+      
+      this.claudeProcess = null;
+      this.promptUser();
+    }
   }
 
   async handleToolUse(toolBlock) {
