@@ -120,16 +120,30 @@ Keep your responses short and focused on the specific task at hand.`;
       })) {
         messages.push(message);
 
-        // 实时输出Claude Code的响应
-        if (message.type === 'text') {
-          process.stdout.write(message.text);
-        } else if (message.type === 'tool_use') {
-          console.log(`\n🔧 使用工具: ${message.name}`);
-          if (message.input) {
-            console.log(`参数: ${JSON.stringify(message.input, null, 2)}`);
+        // 处理不同类型的消息
+        if (message.type === 'assistant') {
+          // 处理助手消息
+          const content = message.message.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === 'text') {
+                process.stdout.write(block.text);
+              } else if (block.type === 'tool_use') {
+                console.log(`\n🔧 使用工具: ${block.name}`);
+                if (block.input) {
+                  console.log(`参数: ${JSON.stringify(block.input, null, 2)}`);
+                }
+              }
+            }
           }
-        } else if (message.type === 'tool_result') {
-          console.log(`✅ 工具结果: ${message.content?.substring(0, 200)}${message.content?.length > 200 ? '...' : ''}`);
+        } else if (message.type === 'system') {
+          console.log(`\n🤖 系统: 已连接 Claude Code (${message.model})`);
+        } else if (message.type === 'result') {
+          if (message.subtype === 'success') {
+            console.log(`\n✅ 完成 (${message.num_turns} 轮对话, ${message.duration_ms}ms)`);
+          } else {
+            console.log(`\n❌ 错误: ${message.subtype}`);
+          }
         }
       }
 
