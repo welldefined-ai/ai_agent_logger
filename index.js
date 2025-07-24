@@ -190,6 +190,9 @@ Keep your responses short and focused on the specific task at hand.`;
           console.log(`🔄 Claude模式已切换到: ${this.claudeMode.toUpperCase()}`);
           if (this.claudeMode === 'native') {
             console.log('现在使用原生Claude Code CLI，获得完整交互体验！');
+            // 立即启动原生Claude CLI
+            await this.startClaudeNativeMode();
+            return; // 不要继续执行 promptUser()
           } else {
             console.log('现在使用Claude Code SDK，享受自定义功能！');
             this.claudeSessionId = null; // 重置会话
@@ -249,7 +252,10 @@ Keep your responses short and focused on the specific task at hand.`;
   async sendToAI(userInput) {
     if (this.currentProvider === 'claude') {
       if (this.claudeMode === 'native') {
-        await this.sendToClaudeNative(userInput);
+        // 在native模式下，用户应该直接在原生CLI中交互
+        console.log('💡 你现在在原生Claude CLI模式下，请直接在上面的CLI中输入');
+        console.log('💡 按 Ctrl+B 可以返回到我们的CLI工具');
+        return;
       } else {
         await this.sendToClaude(userInput);
       }
@@ -367,17 +373,6 @@ Keep your responses short and focused on the specific task at hand.`;
     this.promptUser();
   }
 
-  async sendToClaudeNative(userInput) {
-    // 在native模式下，我们启动Claude CLI然后直接透传所有输入输出
-    if (!this.claudeProcess) {
-      await this.startClaudeNativeMode();
-    }
-    
-    // 将用户输入发送给Claude进程
-    if (this.claudeProcess && this.claudeProcess.stdin.writable) {
-      this.claudeProcess.stdin.write(userInput + '\n');
-    }
-  }
 
   async startClaudeNativeMode() {
     try {
