@@ -15,6 +15,7 @@ class AICodeSimulator {
 
     this.conversationHistory = [];
     this.currentProvider = 'claude'; // Default to Claude
+    this.claudeSessionId = null; // 持续的Claude会话ID
     this.systemPrompt = `You are Claude Code, Anthropic's official CLI for Claude.
 You are an interactive CLI tool that helps users with software engineering tasks.
 You should be concise, direct, and to the point.
@@ -47,6 +48,7 @@ Keep your responses short and focused on the specific task at hand.`;
 
       if (input.toLowerCase() === '/clear' || input.toLowerCase() === 'clear') {
         this.conversationHistory = [];
+        this.claudeSessionId = null; // 重置Claude会话ID
         console.log('💭 对话历史已清空\n');
         this.promptUser();
         return;
@@ -107,18 +109,33 @@ Keep your responses short and focused on the specific task at hand.`;
     try {
       console.log('\n🤖 Claude Code 正在处理...\n');
 
-      // 使用Claude Code SDK的完整体验
+      // 配置选项：使用持续会话
+      const options = {
+        maxTurns: 50, // 增加轮次限制
+      };
+
+      // 如果有现有会话ID，使用resume继续对话
+      if (this.claudeSessionId) {
+        options.resume = this.claudeSessionId;
+        console.log('🔄 继续现有会话\n');
+      } else {
+        console.log('🔄 创建新的 Claude Code 会话\n');
+      }
+
+      // 使用Claude Code SDK查询
       const abortController = new AbortController();
-      const messages = [];
+      let sessionStarted = false;
 
       for await (const message of query({
         prompt: userInput,
         abortController,
-        options: {
-          maxTurns: 3,
-        },
+        options,
       })) {
-        messages.push(message);
+        // 保存会话ID用于后续对话
+        if (message.session_id && !sessionStarted) {
+          this.claudeSessionId = message.session_id;
+          sessionStarted = true;
+        }
 
         // 处理不同类型的消息
         if (message.type === 'assistant') {
@@ -136,13 +153,17 @@ Keep your responses short and focused on the specific task at hand.`;
               }
             }
           }
-        } else if (message.type === 'system') {
-          console.log(`\n🤖 系统: 已连接 Claude Code (${message.model})`);
+        } else if (message.type === 'system' && message.subtype === 'init') {
+          console.log(`🤖 已连接 Claude Code (${message.model})`);
         } else if (message.type === 'result') {
           if (message.subtype === 'success') {
             console.log(`\n✅ 完成 (${message.num_turns} 轮对话, ${message.duration_ms}ms)`);
           } else {
             console.log(`\n❌ 错误: ${message.subtype}`);
+            // 如果错误，重置会话
+            if (message.subtype === 'error_max_turns') {
+              this.claudeSessionId = null;
+            }
           }
         }
       }
@@ -151,6 +172,12 @@ Keep your responses short and focused on the specific task at hand.`;
 
     } catch (error) {
       console.error('❌ 错误:', error.message);
+
+      // 如果会话出错，重置会话ID
+      if (error.message.includes('session') || error.message.includes('context') || error.message.includes('resume')) {
+        console.log('🔄 会话已重置，请重新开始对话');
+        this.claudeSessionId = null;
+      }
 
       if (error.message.includes('API key')) {
         console.log('\n💡 请设置 ANTHROPIC_API_KEY 环境变量:');
