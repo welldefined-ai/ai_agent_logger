@@ -380,14 +380,17 @@ Keep your responses short and focused on the specific task at hand.`;
       console.log('💡 按 Ctrl+B 可以返回到我们的CLI工具');
       console.log('─'.repeat(50));
       
-      // 启动claude进程
+      // 先暂停我们的readline
+      this.rl.pause();
+      
+      // 启动claude进程，使用pipe模式以便我们控制输入
       this.claudeProcess = spawn('claude', [], {
-        stdio: ['inherit', 'inherit', 'inherit'], // 直接继承父进程的stdio
+        stdio: ['pipe', 'inherit', 'inherit'], // stdin用pipe，stdout/stderr直接inherit
         cwd: process.cwd(),
         env: { ...process.env }
       });
 
-      // 设置rawMode以捕获特殊按键
+      // 设置rawMode以捕获特殊按键并转发输入
       this.setupRawModeForNative();
 
       this.claudeProcess.on('close', (code) => {
@@ -416,19 +419,23 @@ Keep your responses short and focused on the specific task at hand.`;
   }
 
   setupRawModeForNative() {
-    // 暂时关闭readline，设置原始模式以捕获Ctrl+B
-    if (process.stdin.isTTY && this.rl) {
-      this.rl.pause();
+    // 设置原始模式以捕获所有按键并转发到Claude进程
+    if (process.stdin.isTTY) {
       process.stdin.setRawMode(true);
       process.stdin.resume();
       
-      // 监听特殊按键
+      // 监听所有按键输入
       this.nativeKeyHandler = (key) => {
         // 检查Ctrl+B (ASCII码2)
         if (key.length === 1 && key[0] === 2) {
           console.log('\n\n🔄 检测到 Ctrl+B，正在返回CLI工具...');
           this.exitNativeMode();
           return;
+        }
+        
+        // 将其他所有按键转发给Claude进程
+        if (this.claudeProcess && this.claudeProcess.stdin.writable) {
+          this.claudeProcess.stdin.write(key);
         }
       };
       
