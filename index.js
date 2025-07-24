@@ -372,6 +372,11 @@ Keep your responses short and focused on the specific task at hand.`;
     if (!this.claudeProcess) {
       await this.startClaudeNativeMode();
     }
+    
+    // 将用户输入发送给Claude进程
+    if (this.claudeProcess && this.claudeProcess.stdin.writable) {
+      this.claudeProcess.stdin.write(userInput + '\n');
+    }
   }
 
   async startClaudeNativeMode() {
