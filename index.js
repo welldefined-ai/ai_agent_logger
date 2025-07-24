@@ -254,7 +254,7 @@ Keep your responses short and focused on the specific task at hand.`;
       if (this.claudeMode === 'native') {
         // 在native模式下，用户应该直接在原生CLI中交互
         console.log('💡 你现在在原生Claude CLI模式下，请直接在上面的CLI中输入');
-        console.log('💡 按 Ctrl+B 可以返回到我们的CLI工具');
+        console.log('💡 使用原生CLI的退出命令返回到我们的CLI工具');
         return;
       } else {
         await this.sendToClaude(userInput);
@@ -377,21 +377,20 @@ Keep your responses short and focused on the specific task at hand.`;
   async startClaudeNativeMode() {
     try {
       console.log('\n🎯 正在启动原生Claude Code CLI...');
-      console.log('💡 按 Ctrl+B 可以返回到我们的CLI工具');
+      console.log('💡 使用原生CLI的退出命令（如输入 exit 或按 Ctrl+C）返回到我们的CLI工具');
       console.log('─'.repeat(50));
       
       // 先暂停我们的readline
       this.rl.pause();
       
-      // 启动claude进程，使用pipe模式以便我们控制输入
+      // 启动claude进程，直接连接到终端
       this.claudeProcess = spawn('claude', [], {
-        stdio: ['pipe', 'inherit', 'inherit'], // stdin用pipe，stdout/stderr直接inherit
+        stdio: 'inherit', // 直接继承父进程的stdio，让原生CLI完全控制终端
         cwd: process.cwd(),
         env: { ...process.env }
       });
 
-      // 设置rawMode以捕获特殊按键并转发输入
-      this.setupRawModeForNative();
+      // 使用inherit模式，原生CLI直接控制终端，不需要raw mode转发
 
       this.claudeProcess.on('close', (code) => {
         console.log(`\n🔄 Claude Code CLI进程已退出 (code: ${code})`);
@@ -418,30 +417,6 @@ Keep your responses short and focused on the specific task at hand.`;
     }
   }
 
-  setupRawModeForNative() {
-    // 设置原始模式以捕获所有按键并转发到Claude进程
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(true);
-      process.stdin.resume();
-      
-      // 监听所有按键输入
-      this.nativeKeyHandler = (key) => {
-        // 检查Ctrl+B (ASCII码2)
-        if (key.length === 1 && key[0] === 2) {
-          console.log('\n\n🔄 检测到 Ctrl+B，正在返回CLI工具...');
-          this.exitNativeMode();
-          return;
-        }
-        
-        // 将其他所有按键转发给Claude进程
-        if (this.claudeProcess && this.claudeProcess.stdin.writable) {
-          this.claudeProcess.stdin.write(key);
-        }
-      };
-      
-      process.stdin.on('data', this.nativeKeyHandler);
-    }
-  }
 
   exitNativeMode() {
     // 退出native模式，返回到我们的CLI
@@ -450,21 +425,9 @@ Keep your responses short and focused on the specific task at hand.`;
       this.claudeProcess = null;
     }
 
-    // 恢复正常的输入模式
-    if (process.stdin.isTTY) {
-      // 移除我们的按键监听器
-      if (this.nativeKeyHandler) {
-        process.stdin.removeListener('data', this.nativeKeyHandler);
-        this.nativeKeyHandler = null;
-      }
-      
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
-      
-      // 恢复readline
-      if (this.rl) {
-        this.rl.resume();
-      }
+    // 恢复readline
+    if (this.rl) {
+      this.rl.resume();
     }
 
     console.log('\n✅ 已返回到增强CLI工具');
