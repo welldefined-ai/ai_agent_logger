@@ -49,10 +49,10 @@ class PermissionHandler {
       if (details) {
         console.log(`   详情: ${details}`);
       }
-      
+
       this.rl.question('\n允许此操作吗? (y/n/always/never): ', (answer) => {
         const response = answer.toLowerCase().trim();
-        
+
         if (response === 'y' || response === 'yes') {
           console.log('✅ 权限已授予');
           resolve('allow');
@@ -87,6 +87,7 @@ class AICodeSimulator {
     this.permissionHandler = new PermissionHandler(this.rl);
     this.loadingSpinner = null;
     this.claudeProcess = null; // 原生Claude Code CLI子进程
+    this.nativeKeyHandler = null; // native模式下的按键处理器
     this.systemPrompt = `You are Claude Code, Anthropic's official CLI for Claude.
 You are an interactive CLI tool that helps users with software engineering tasks.
 You should be concise, direct, and to the point.
@@ -101,7 +102,7 @@ Keep your responses short and focused on the specific task at hand.`;
     console.log('╰──────────────────────────────────────────────────────╯');
     console.log();
     console.log(`🔮 当前模式: ${this.currentProvider.toUpperCase()}`);
-    
+
     if (this.currentProvider === 'claude') {
       console.log(`✨ Claude Code 模式: ${this.claudeMode.toUpperCase()}`);
       if (this.claudeMode === 'native') {
@@ -117,7 +118,7 @@ Keep your responses short and focused on the specific task at hand.`;
     } else {
       console.log('🤔 Gemini 模式: 对话式AI助手');
     }
-    
+
     console.log();
     console.log('💡 提示: 输入 "/help" 查看所有可用命令');
     console.log('📋 环境要求: 确保设置了 ANTHROPIC_API_KEY 和 GEMINI_API_KEY');
@@ -134,7 +135,7 @@ Keep your responses short and focused on the specific task at hand.`;
     } else {
       prompt = '🤔 gemini > ';
     }
-    
+
     this.rl.question(prompt, async (input) => {
       // 处理特殊命令
       if (input.toLowerCase() === '/exit' || input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
@@ -151,14 +152,14 @@ Keep your responses short and focused on the specific task at hand.`;
       if (input.toLowerCase() === '/clear' || input.toLowerCase() === 'clear') {
         this.conversationHistory = [];
         this.claudeSessionId = null; // 重置Claude会话ID
-        
+
         // 如果在native模式，重启Claude进程以清空上下文
         if (this.currentProvider === 'claude' && this.claudeMode === 'native' && this.claudeProcess) {
           console.log('🔄 重启Claude CLI进程以清空上下文...');
           this.claudeProcess.kill();
           this.claudeProcess = null;
         }
-        
+
         console.log('💭 对话历史已清空\n');
         this.promptUser();
         return;
@@ -184,7 +185,7 @@ Keep your responses short and focused on the specific task at hand.`;
             this.claudeProcess.kill();
             this.claudeProcess = null;
           }
-          
+
           this.claudeMode = this.claudeMode === 'sdk' ? 'native' : 'sdk';
           console.log(`🔄 Claude模式已切换到: ${this.claudeMode.toUpperCase()}`);
           if (this.claudeMode === 'native') {
@@ -230,6 +231,7 @@ Keep your responses short and focused on the specific task at hand.`;
         console.log('   🎯 原生Claude Code CLI子进程');
         console.log('   ✨ 完整交互式体验，与官方CLI完全一致');
         console.log('   🚀 最佳性能和功能兼容性');
+        console.log('   ⌨️  按 Ctrl+B 返回增强CLI工具');
         console.log('   💡 使用 /mode 切换回SDK模式');
       } else {
         console.log('   ✨ 支持文件读写、代码分析、项目管理');
@@ -331,7 +333,7 @@ Keep your responses short and focused on the specific task at hand.`;
         } else if (message.type === 'result') {
           this.loadingSpinner.stop();
           waitingForInput = false;
-          
+
           if (message.subtype === 'success') {
             console.log(`\n\n💫 完成 (${message.num_turns} 轮对话, ${message.duration_ms}ms, $${message.total_cost_usd.toFixed(4)})`);
           } else {
@@ -366,94 +368,106 @@ Keep your responses short and focused on the specific task at hand.`;
   }
 
   async sendToClaudeNative(userInput) {
+    // 在native模式下，我们启动Claude CLI然后直接透传所有输入输出
+    if (!this.claudeProcess) {
+      await this.startClaudeNativeMode();
+    }
+  }
+
+  async startClaudeNativeMode() {
     try {
-      // 如果没有运行的Claude进程，启动一个新的
-      if (!this.claudeProcess) {
-        console.log('\n🎯 正在启动原生Claude Code CLI...');
-        
-        // 启动claude-code进程，使用交互模式
-        this.claudeProcess = spawn('claude-code', ['-i'], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          cwd: process.cwd(),
-          env: { ...process.env }
-        });
+      console.log('\n🎯 正在启动原生Claude Code CLI...');
+      console.log('💡 按 Ctrl+B 可以返回到我们的CLI工具');
+      console.log('─'.repeat(50));
+      
+      // 启动claude进程
+      this.claudeProcess = spawn('claude', [], {
+        stdio: ['inherit', 'inherit', 'inherit'], // 直接继承父进程的stdio
+        cwd: process.cwd(),
+        env: { ...process.env }
+      });
 
-        // 设置进程输出处理
-        let responseBuffer = '';
-        this.claudeProcess.stdout.on('data', (data) => {
-          const output = data.toString();
-          responseBuffer += output;
-          
-          // 检查是否有完整的响应（以换行符结束）
-          if (output.includes('\n')) {
-            // 过滤掉原生CLI的提示符，避免重复显示
-            const cleanOutput = responseBuffer.replace(/^claude-code > /gm, '');
-            process.stdout.write(cleanOutput);
-            responseBuffer = '';
-            
-            // 当Claude响应完成后，返回到我们的提示符
-            setTimeout(() => {
-              this.promptUser();
-            }, 100);
-          }
-        });
+      // 设置rawMode以捕获特殊按键
+      this.setupRawModeForNative();
 
-        this.claudeProcess.stderr.on('data', (data) => {
-          const error = data.toString();
-          console.error(`Claude CLI Error: ${error}`);
-        });
-
-        this.claudeProcess.on('close', (code) => {
-          console.log(`\n🔄 Claude Code CLI进程已退出 (code: ${code})`);
-          this.claudeProcess = null;
-          this.promptUser();
-        });
-
-        this.claudeProcess.on('error', (error) => {
-          if (error.code === 'ENOENT') {
-            console.error('\n❌ 错误: 找不到claude-code命令');
-            console.log('💡 请确保已安装Claude Code CLI:');
-            console.log('   npm install -g @anthropic-ai/claude-code');
-            console.log('   或者使用: brew install anthropic/claude/claude-code');
-          } else {
-            console.error('\n❌ Claude CLI启动错误:', error.message);
-          }
-          this.claudeProcess = null;
-          this.promptUser();
-        });
-
-        // 等待进程启动
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        console.log('✅ Claude Code CLI已启动');
-      }
-
-      // 发送用户输入到Claude进程
-      if (this.claudeProcess && this.claudeProcess.stdin.writable) {
-        this.claudeProcess.stdin.write(userInput + '\n');
-        // 不在这里调用promptUser()，让输出处理器来决定何时返回提示符
-      } else {
-        console.error('❌ Claude进程不可写入');
+      this.claudeProcess.on('close', (code) => {
+        console.log(`\n🔄 Claude Code CLI进程已退出 (code: ${code})`);
         this.claudeProcess = null;
-        this.promptUser();
-      }
+        this.exitNativeMode();
+      });
+
+      this.claudeProcess.on('error', (error) => {
+        if (error.code === 'ENOENT') {
+          console.error('\n❌ 错误: 找不到claude命令');
+          console.log('💡 请确保已安装Claude Code CLI:');
+          console.log('   npm install -g @anthropic-ai/claude-code');
+        } else {
+          console.error('\n❌ Claude CLI启动错误:', error.message);
+        }
+        this.claudeProcess = null;
+        this.exitNativeMode();
+      });
 
     } catch (error) {
       console.error('\n❌ Claude Native模式错误:', error.message);
+      this.claudeProcess = null;
+      this.exitNativeMode();
+    }
+  }
+
+  setupRawModeForNative() {
+    // 暂时关闭readline，设置原始模式以捕获Ctrl+B
+    if (process.stdin.isTTY && this.rl) {
+      this.rl.pause();
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
       
-      if (error.message.includes('claude-code')) {
-        console.log('\n💡 请确保已安装Claude Code CLI:');
-        console.log('   npm install -g @anthropic-ai/claude-code');
-        console.log('   或者检查ANTHROPIC_API_KEY环境变量');
+      // 监听特殊按键
+      this.nativeKeyHandler = (key) => {
+        // 检查Ctrl+B (ASCII码2)
+        if (key.length === 1 && key[0] === 2) {
+          console.log('\n\n🔄 检测到 Ctrl+B，正在返回CLI工具...');
+          this.exitNativeMode();
+          return;
+        }
+      };
+      
+      process.stdin.on('data', this.nativeKeyHandler);
+    }
+  }
+
+  exitNativeMode() {
+    // 退出native模式，返回到我们的CLI
+    if (this.claudeProcess) {
+      this.claudeProcess.kill();
+      this.claudeProcess = null;
+    }
+
+    // 恢复正常的输入模式
+    if (process.stdin.isTTY) {
+      // 移除我们的按键监听器
+      if (this.nativeKeyHandler) {
+        process.stdin.removeListener('data', this.nativeKeyHandler);
+        this.nativeKeyHandler = null;
       }
       
-      this.claudeProcess = null;
-      this.promptUser();
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      
+      // 恢复readline
+      if (this.rl) {
+        this.rl.resume();
+      }
     }
+
+    console.log('\n✅ 已返回到增强CLI工具');
+    console.log('─'.repeat(50));
+    this.promptUser();
   }
 
   async handleToolUse(toolBlock) {
     console.log(`\n\n🔧 正在使用工具: ${toolBlock.name}`);
-    
+
     // 显示工具参数（格式化显示）
     if (toolBlock.input && Object.keys(toolBlock.input).length > 0) {
       console.log('📋 参数:');
